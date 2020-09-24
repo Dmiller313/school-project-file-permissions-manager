@@ -1,0 +1,282 @@
+#!/bin/bash
+cols=`tput cols`
+trap 'stty icanon icrnl echo; rm /tmp/perm.temp.$$; tput cup $((cols + 1)) 0; exit 0' INT
+case $# in
+	0) dir=. ;;
+	1) dir=$1 ;;
+	*) echo "Usage: perm [ dir-name ]" >&2
+		exit 1 ;;
+esac
+if [ ! -d $dir ]
+	then echo $dir is not a valid directory name >&2
+        exit 1
+fi
+
+print_details(){
+	printf '  Links: '
+	#second field of ls -al
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $2}'`
+	printf '  Owner: '
+	#3rd field of ls -al
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $3}'`
+	printf '  Group: '
+	#4th field of ls -al
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $4}'`
+	printf '  Size: '
+	#5th field of ls -al
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $5}'`
+	printf '  Modified: '
+	#concat of 6th, 7th, 8th fields
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $6}'`
+	printf ' '
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $7}'`
+	printf ' '
+	printf `echo ${details[$index]} | awk -F '_{1,5}' '{print $8}'`
+}
+cd $dir
+levels=`pwd | sed 's/\// /g' | sed 's/ /\/ /'`
+levelsArr=($levels)
+
+numDirs=`pwd | awk -F '/' '{ print NF-1 }'`
+selection=$((numDirs + 1))
+selectionLimit=$((numDirs + 1))
+numOfCurrLevel=$selectionLimit
+numDirs=$((numDirs - 1))
+currDirName=`pwd`
+
+colPos=([0]=0 [1]=2 [2]=4 [3]=8 [4]=10 [5]=12 [6]=16 [7]=18 [8]=20 [9]=24)
+colCommands=([0]=u+r [1]=u+w [2]=u+x [3]=g+r [4]=g+w [5]=g+x [6]=o+r [7]=o+w [8]=o+x [9]=invalid)
+colRemovals=([0]=u-r [1]=u-w [2]=u-x [3]=g-r [4]=g-w [5]=g-x [6]=o-r [7]=o-w [8]=o-x [9]=invalid)
+colIndex=9 #position of cursor across permissions/dirname
+
+currLevelNum=4 #initial position of additional details
+slash="/"
+begin=true
+initial=true
+cursor=3 #initial position of writing permissions
+
+lines=`tput lines`
+
+details=()
+counter=0
+for level in $levels
+do
+	if [$level = "/" ]
+	then
+		currLevel="/"
+	elif [ $currLevel = "/" ]
+	then
+		currLevel=$currLevel$level
+	else
+		currLevel=$currLevel$slash$level
+	fi
+	complete=`ls -ald $currLevel | head -2 | tail -1 | sed 's/ /_/g'`
+	details+=($complete)
+	
+	counter=$((counter+1))
+done
+clear
+stty -icanon min 1 time 0 -icrnl -echo
+tput smkx
+while true 
+do
+	cursor=3
+	currLevel="/"
+	if [ $begin = true ]
+	then 	
+		tput cup 0 0
+		printf    "Owner   Group   Other   Filename\n"
+		printf -- "-----   -----   -----   --------\n\n"
+
+		tput cup 3 0
+		for level in $levels
+		do	
+			if [ $level = "/" ]
+			then
+				currLevel="/"
+			elif [ $currLevel = "/" ]
+			then
+				currLevel=$currLevel$level
+			else
+				currLevel=$currLevel$slash$level
+			fi
+			ls -ald $currLevel | head -2 | tail -1 > /tmp/perm.temp.$$
+			
+			permissions=`awk -F '[[:space:]]' '{print $1}' /tmp/perm.temp.$$ | sed  's/^.//' | sed 's/\.$//' | sed 's/./& /g' | sed 's/.\{6\}/& /g' | sed 's/.\{7\}/& /g'`
+			printf "$permissions"			
+			longText=${level:0:56}
+			printf "$longText"
+			currLevelNum=$((currLevelNum + 2))
+			cursor=$((cursor + 2))
+			tput cup $cursor 0
+		done
+		currLevelNum=$((currLevelNum-2))
+		cursor=$((cursor - 2))
+		begin=false
+		
+		if [ $initial == true ]
+		then
+			tput cup $cols 0
+			tput cuu 3
+			printf "Valid keys: k (up), j (down): move between filenames\n            h (left), l (right): move between permissions\n            r, w, x, -: change permissions;  q: quit"
+			tput cup $currLevelNum 0
+			index=$((selection - 1))
+			print_details
+			tput sc
+			
+			selectedItem=$((currLevelNum - 1))
+			tput cup $selectedItem ${colPos[colIndex]}
+			
+
+		fi
+		initial=false
+	fi
+	command=$(dd bs=3 count=1 2> /dev/null)
+	case $command in
+		k) #up
+			selection=$((selection - 1))
+			if [ $selection -gt 0 ]
+			then
+				tput rc	
+				tput el
+				tput el1
+				
+				currLevelNum=$((currLevelNum - 2))
+				tput cup $currLevelNum 0
+				index=$((selection - 1))
+				print_details
+				tput sc
+				selectedItem=$((currLevelNum - 1))
+				tput cup $selectedItem ${colPos[colIndex]}
+				numOfCurrLevel=$((numOfCurrLevel - 1))
+				if [ $numOfCurrLevel -eq 0 ]
+				then
+					currDirName="/"
+				else
+					for (( i=0; i<$numOfCurrLevel; i++ ))
+					do
+						if [ $i -eq 0 ]
+						then
+							currDirName=${levelsArr[i]}
+						elif [ $i -eq 1 ]
+						then
+							currDirName=$currDirName${levelsArr[i]}
+						else
+							currDirName=$currDirName/${levelsArr[i]}
+						fi
+					done
+				fi
+			else
+				selection=$((selection + 1))
+			fi
+			;;
+		j) #down
+			selection=$((selection + 1))
+			if [ $selection -le $selectionLimit ]
+			then	
+				tput rc
+				tput el
+				tput el1
+				
+				currLevelNum=$((currLevelNum + 2))
+				tput cup $currLevelNum 0
+				index=$((selection - 1))
+				print_details
+				
+				tput sc
+				selectedItem=$((currLevelNum - 1))
+				tput cup $selectedItem ${colPos[colIndex]}
+				numOfCurrLevel=$((numOfCurrLevel + 1))
+				if [ $numOfCurrLevel -eq 0 ]
+				then
+					currDirName="/"
+				else
+					for (( i=0; i<$numOfCurrLevel; i++ ))
+					do
+						if [ $i -eq 0 ]
+						then
+							currDirName=${levelsArr[i]}
+						elif [ $i -eq 1 ]
+						then
+							currDirName=$currDirName${levelsArr[i]}
+						else
+							currDirName=$currDirName/${levelsArr[i]}
+						fi
+					done
+				fi
+			else
+				selection=$((selection - 1))
+			fi
+			;;
+		h) #left
+			if [ $colIndex -gt 0 ]
+			then
+				colIndex=$((colIndex - 1))
+			fi
+			tput cup $selectedItem ${colPos[colIndex]}
+			;;
+		l) #right
+			if [ $colIndex -lt 9 ]
+			then
+				colIndex=$((colIndex + 1))
+			fi
+			tput cup $selectedItem ${colPos[colIndex]}
+			;;
+		r) #grant read access
+			if [ $colIndex -eq 0 ] || [ $colIndex -eq 3 ] || [ $colIndex -eq 6 ]
+			then
+				chmod ${colCommands[colIndex]} $currDirName 2> /tmp/perm.temp.$$
+				success=`cat /tmp/perm.temp.$$ | wc -c`
+				if [ $success -eq 0 ]
+				then
+					printf "r"
+				fi
+				tput cup $selectedItem ${colPos[colIndex]}
+			fi
+			;;
+		w) #grant write access
+			if [ $colIndex -eq 1 ] || [ $colIndex -eq 4 ] || [ $colIndex -eq 7 ]
+			then	
+				chmod ${colCommands[colIndex]} $currDirName 2> /tmp/perm.temp.$$
+
+				success=`cat /tmp/perm.temp.$$ | wc -c`
+				if [ $success -eq 0 ]
+				then
+					printf "w"
+				fi
+				tput cup $selectedItem ${colPos[colIndex]}
+			fi
+			;;
+		x) #grant execute access
+			if [ $colIndex -eq 2 ] || [ $colIndex -eq 5 ] || [ $colIndex -eq 8 ]
+			then
+				chmod ${colCommands[colIndex]} $currDirName 2> /tmp/perm.temp.$$
+				success=`cat /tmp/perm.temp.$$ | wc -c`
+				if [ $success -eq 0 ]
+				then
+					printf "x"
+				fi
+				tput cup $selectedItem ${colPos[colIndex]}
+			fi
+			;;
+		-) #remove permission
+			if [ $colIndex -lt 9 ]
+			then
+				chmod ${colRemovals[colIndex]} $currDirName 2> /tmp/perm.temp.$$
+				success=`cat /tmp/perm.temp.$$ | wc -c`
+				if [ $success -eq 0 ]
+				then
+					printf "-"
+				fi
+				tput cup $selectedItem ${colPos[colIndex]}
+			fi
+			;;
+		q) #quit
+			rm /tmp/perm.temp.$$
+			stty icanon icrnl echo
+			tput cup $((cols + 1)) 0
+			exit 0
+			;;
+	esac
+done
+
